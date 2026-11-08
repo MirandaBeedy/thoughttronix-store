@@ -24,22 +24,24 @@
       <section class="card bg-base-100 shadow-md">
         <div class="card-body">
           <h2 class="card-title">Shipping address</h2>
-          <div class="grid gap-4 sm:grid-cols-2">
-            {% for field in form.shipping_fields %}
-              {% include "orders/partials/_field.html" %}
-            {% endfor %}
-          </div>
+          {% if saved_addresses %}
+            <div>
+              {% include "orders/partials/_address_picker.html" with prefix="shipping" selected=user.default_shipping_address_id %}
+            </div>
+          {% endif %}
+          {% include "orders/partials/_address_fields.html" with section=form.shipping_section %}
         </div>
       </section>
 
       <section class="card bg-base-100 shadow-md">
         <div class="card-body">
           <h2 class="card-title">Billing address</h2>
-          <div class="grid gap-4 sm:grid-cols-2">
-            {% for field in form.billing_fields %}
-              {% include "orders/partials/_field.html" %}
-            {% endfor %}
-          </div>
+          {% if saved_addresses %}
+            <div>
+              {% include "orders/partials/_address_picker.html" with prefix="billing" selected=user.default_billing_address_id %}
+            </div>
+          {% endif %}
+          {% include "orders/partials/_address_fields.html" with section=form.billing_section %}
         </div>
       </section>
 

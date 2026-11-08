@@ -74,7 +74,11 @@ cvv_validator = RegexValidator(r"^\d{3,4}$", "Enter the 3- or 4-digit CVV.")
 
 
 class CheckoutForm(forms.Form):
-    """One page, one POST: contact, shipping, billing, payment."""
+    """One page, one POST: contact, shipping, billing, payment.
+
+    The two ``save_*`` checkboxes are optional booleans that ``place_order``
+    ignores; the checkout view acts on them after the order is placed.
+    """
 
     email = forms.EmailField(label="Email")
 
@@ -88,6 +92,9 @@ class CheckoutForm(forms.Form):
     shipping_zip = forms.CharField(
         label="ZIP code", max_length=10, validators=[zip_validator]
     )
+    save_shipping = forms.BooleanField(
+        label="Save this address to my account", required=False
+    )
 
     billing_name = forms.CharField(label="Full name", max_length=100)
     billing_street = forms.CharField(label="Street address", max_length=200)
@@ -98,6 +105,9 @@ class CheckoutForm(forms.Form):
     billing_state = forms.ChoiceField(label="State", choices=US_STATES)
     billing_zip = forms.CharField(
         label="ZIP code", max_length=10, validators=[zip_validator]
+    )
+    save_billing = forms.BooleanField(
+        label="Save this address to my account", required=False
     )
 
     card_number = forms.CharField(
@@ -114,6 +124,8 @@ class CheckoutForm(forms.Form):
             widget = field.widget
             if isinstance(widget, forms.Select):
                 widget.attrs["class"] = "select w-full"
+            elif isinstance(widget, forms.CheckboxInput):
+                widget.attrs["class"] = "checkbox checkbox-sm"
             else:
                 widget.attrs["class"] = "input w-full"
 
@@ -124,6 +136,24 @@ class CheckoutForm(forms.Form):
 
     def billing_fields(self):
         return [self[name] for name in self.fields if name.startswith("billing_")]
+
+    def address_section(self, prefix):
+        """One address section — its fields and its "save" checkbox — as
+        the context ``_address_fields.html`` renders. Shared by the
+        checkout page and the HTMX fill endpoint."""
+        return {
+            "prefix": prefix,
+            "fields": [
+                self[name] for name in self.fields if name.startswith(f"{prefix}_")
+            ],
+            "save_field": self[f"save_{prefix}"],
+        }
+
+    def shipping_section(self):
+        return self.address_section("shipping")
+
+    def billing_section(self):
+        return self.address_section("billing")
 
     def card_fields(self):
         return [self[name] for name in self.fields if name.startswith("card_")]

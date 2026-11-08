@@ -1,0 +1,13 @@
+{# One checkout address section: its fields and its "save" checkbox. #}
+{# Rendered inline by checkout.html and swapped in by orders:address_fields. #}
+<div id="{{ section.prefix }}-address-fields" class="space-y-4">
+  <div class="grid gap-4 sm:grid-cols-2">
+    {% for field in section.fields %}
+      {% include "orders/partials/_field.html" %}
+    {% endfor %}
+  </div>
+  <label class="label cursor-pointer justify-start gap-3" for="{{ section.save_field.id_for_label }}">
+    {{ section.save_field }}
+    <span>{{ section.save_field.label }}</span>
+  </label>
+</div>

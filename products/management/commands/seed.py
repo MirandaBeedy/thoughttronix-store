@@ -8,7 +8,8 @@ Demo logins (documented in the README):
 
     admin / admin123        superuser
     employee / employee123  staff, "Junior Thought Curator"
-    customer / customer123  a plain customer, with order history and a live cart
+    customer / customer123  a plain customer, with order history, a live cart,
+                            and two saved addresses
 """
 
 import random
@@ -21,6 +22,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
+from accounts.models import Address
 from orders.models import Cart, Order, OrderItem
 from products.models import Category, Product, Tag
 
@@ -494,6 +496,9 @@ SEED_ADDRESSES = [
     ("28 Ganglion Court", "Denver", "CO", "80202"),
 ]
 
+# The customer demo login's saved addresses: home (both defaults), work.
+CUSTOMER_ADDRESSES = SEED_ADDRESSES[:2]
+
 CARD_LAST4S = ["4242", "4111", "1881", "0005"]
 
 
@@ -507,6 +512,7 @@ class Command(BaseCommand):
         self._create_catalog(tags)
         self._create_users()
         self._create_customer_cart()
+        self._create_customer_addresses()
         self._create_orders()
 
         self.stdout.write(
@@ -585,6 +591,26 @@ class Command(BaseCommand):
         cart = Cart.for_user(customer)
         for slug, quantity in CUSTOMER_CART:
             cart.items.create(product=Product.objects.get(slug=slug), quantity=quantity)
+
+    def _create_customer_addresses(self):
+        """Two saved addresses for 'customer': home is both defaults, work
+        is the alternative — so the checkout dropdown has a real choice.
+        Background customers have none (and cascade away in the wipe)."""
+        customer = get_user_model().objects.get(username="customer")
+        name = f"{customer.first_name} {customer.last_name}"
+        home, work = (
+            Address.objects.create(
+                user=customer,
+                name=name,
+                street=street,
+                city=city,
+                state=state,
+                zip=zip_code,
+            )
+            for street, city, state, zip_code in CUSTOMER_ADDRESSES
+        )
+        customer.set_default_address("shipping", home)
+        customer.set_default_address("billing", home)
 
     def _create_orders(self):
         """Order history: 4 visible orders for 'customer', 48 background.

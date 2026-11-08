@@ -4,17 +4,21 @@ The three HTMX interactions of the core live here: add-to-cart, quantity
 change, and line removal. Each renders a partial (never ``base.html``);
 the responses carry the navbar badge as an out-of-band swap via the
 ``oob_badge`` context flag. Checkout is conventional full-page work:
-validate the form, hand everything to ``place_order``.
+validate the form, hand everything to ``place_order``. The one
+checkout-side HTMX interaction, ``AddressFieldsView``, refills an
+address section from a saved address.
 """
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views import View
 from django.views.generic import DetailView, FormView, ListView, TemplateView
 
 from accounts.mixins import StaffRequiredMixin
+from accounts.models import ADDRESS_KINDS, Address
 from products.models import Product
 
 from .forms import CheckoutForm, OrderStatusForm
@@ -116,16 +120,62 @@ class CheckoutView(LoginRequiredMixin, FormView):
             return redirect("orders:cart")
         return super().dispatch(request, *args, **kwargs)
 
+    def get_initial(self):
+        """Open with the customer's default addresses already filled in."""
+        initial = super().get_initial()
+        for kind in ADDRESS_KINDS:
+            address = self.request.user.default_address(kind)
+            if address is not None:
+                initial.update(address.as_checkout_initial(kind))
+        return initial
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["cart"] = Cart.for_user(self.request.user)
+        user = self.request.user
+        context["cart"] = Cart.for_user(user)
+        context["saved_addresses"] = list(user.addresses.all())
         return context
 
     def form_valid(self, form):
         cart = Cart.for_user(self.request.user)
         order = place_order(cart, self.request.user, form.cleaned_data)
+        # After the order, deliberately outside its transaction: the order
+        # matters more than the address book.
+        for kind in ADDRESS_KINDS:
+            if form.cleaned_data[f"save_{kind}"]:
+                Address.objects.save_from_checkout(
+                    self.request.user, form.cleaned_data, prefix=kind
+                )
         messages.success(self.request, f"Order {order.number} placed. Thank you!")
         return redirect(reverse("orders:confirmation", kwargs={"pk": order.pk}))
+
+
+class AddressFieldsView(LoginRequiredMixin, View):
+    """HTMX: one checkout address section, refilled from a saved address.
+
+    ``?address=<pk>`` picks the address — looked up through the customer's
+    own book, so another customer's pk is a 404. A blank value renders the
+    section empty, for typing a new address. The section's "save"
+    checkbox always comes back unchecked: a saved address needn't be
+    saved again.
+    """
+
+    def get(self, request, prefix):
+        if prefix not in ADDRESS_KINDS:
+            raise Http404
+        pk = request.GET.get("address", "")
+        initial = {}
+        if pk:
+            if not pk.isdigit():
+                raise Http404
+            address = get_object_or_404(request.user.addresses, pk=pk)
+            initial = address.as_checkout_initial(prefix)
+        form = CheckoutForm(initial=initial)
+        return render(
+            request,
+            "orders/partials/_address_fields.html",
+            {"section": form.address_section(prefix)},
+        )
 
 
 class OwnOrdersMixin(LoginRequiredMixin):

@@ -219,6 +219,9 @@ def test_seed_builds_the_demo_world(db):
     assert not customer.is_staff
     assert customer.cart.item_count() == 4
     assert customer.orders.count() == 4
+    assert customer.addresses.count() == 2
+    assert customer.default_shipping_address == customer.default_billing_address
+    assert customer.default_shipping_address is not None
 
     mark_one = Product.objects.get(slug="soulsear-mark-i")
     assert not mark_one.is_available

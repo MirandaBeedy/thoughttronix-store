@@ -1,0 +1,13 @@
+{# Saved-address dropdown for one checkout section; changing it refills the #}
+{# section's fields via HTMX. Needs: prefix, saved_addresses, selected (pk). #}
+<label class="label mb-1" for="{{ prefix }}-saved-address">Use a saved address</label>
+<select id="{{ prefix }}-saved-address" name="address" class="select w-full"
+        hx-get="{% url 'orders:address_fields' prefix %}"
+        hx-trigger="change"
+        hx-target="#{{ prefix }}-address-fields"
+        hx-swap="outerHTML">
+  <option value="">Enter a new address</option>
+  {% for address in saved_addresses %}
+    <option value="{{ address.pk }}"{% if address.pk == selected %} selected{% endif %}>{{ address }}</option>
+  {% endfor %}
+</select>
