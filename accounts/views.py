@@ -59,6 +59,7 @@ class AddressListView(OwnAddressMixin, ListView):
     def get_queryset(self):
         return super().get_queryset().order_by("name")
 
+
 class AddressCreateView(OwnAddressMixin, SuccessMessageMixin, CreateView):
     """Add an address; it fills any default slot that is still empty."""
 
