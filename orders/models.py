@@ -170,6 +170,17 @@ class Coupon(models.Model):
         self.code = normalize_code(self.code)
         super().save(*args, **kwargs)
 
+    def clean(self):
+        """Uppercase the code during validation, before the uniqueness check.
+
+        ``save()`` alone is too late: a ModelForm (the Django admin's
+        included) checks uniqueness first, so "thoughts10" would pass that
+        check and then crash on the database's unique constraint.
+        """
+        super().clean()
+        if self.code is not None:
+            self.code = normalize_code(self.code)
+
     def is_expired(self, now: datetime | None = None) -> bool:
         """True once ``expires_at`` is reached; a blank expiry never expires."""
         if self.expires_at is None:

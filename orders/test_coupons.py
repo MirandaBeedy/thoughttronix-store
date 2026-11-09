@@ -9,9 +9,11 @@ from decimal import Decimal
 
 import pytest
 from django.contrib import admin
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import ProtectedError
+from django.urls import reverse
 
 from products.models import Product
 
@@ -76,6 +78,58 @@ def test_a_targeted_product_cannot_be_deleted(product_coupon, product):
 
 def test_coupon_is_registered_in_admin():
     assert admin.site.is_registered(Coupon)
+
+
+# --- Regression: duplicate codes typed in another case ----------------------
+#
+# Codes used to be uppercased only in save(), after the uniqueness check
+# had already compared the lowercase spelling, so a duplicate like
+# "thoughts10" slipped past validation and crashed the Django admin with an
+# IntegrityError (HTTP 500). clean() now uppercases before that check.
+
+
+def test_full_clean_uppercases_the_code(db):
+    coupon = Coupon(code="  welcome5 ", percent_off=5)
+    coupon.full_clean()
+    assert coupon.code == "WELCOME5"
+
+
+def test_full_clean_rejects_a_duplicate_code_in_another_case(coupon):
+    with pytest.raises(ValidationError) as excinfo:
+        Coupon(code="thoughts10", percent_off=20).full_clean()
+    assert "code" in excinfo.value.message_dict
+
+
+def admin_add_coupon(client, code):
+    superuser = get_user_model().objects.create_superuser(
+        username="admin", password="admin123"
+    )
+    client.force_login(superuser)
+    return client.post(
+        reverse("admin:orders_coupon_add"),
+        {
+            "code": code,
+            "percent_off": "20",
+            "is_active": "on",
+            "created_at_0": "2026-11-08",
+            "created_at_1": "00:00:00",
+        },
+    )
+
+
+def test_admin_rejects_a_lowercase_duplicate_without_crashing(client, coupon):
+    response = admin_add_coupon(client, "thoughts10")
+
+    assert response.status_code == 200  # the form again, not a 500
+    assert "Coupon with this Code already exists." in response.content.decode()
+    assert list(Coupon.objects.values_list("code", flat=True)) == ["THOUGHTS10"]
+
+
+def test_admin_still_adds_a_new_code_uppercased(client, db):
+    response = admin_add_coupon(client, "spring20")
+
+    assert response.status_code == 302
+    assert Coupon.objects.get().code == "SPRING20"
 
 
 # --- Lookup -----------------------------------------------------------------
