@@ -57,6 +57,11 @@
     </div>
     <div class="card bg-base-100 shadow-md">
       <div class="card-body items-end justify-center">
+        {% if order.has_discount %}
+          <div class="mb-2 w-full max-w-xs">
+            {% include "orders/partials/_receipt_summary.html" %}
+          </div>
+        {% endif %}
         <p class="text-sm uppercase tracking-wide opacity-60">Order total</p>
         <p class="text-3xl font-bold text-primary">${{ order.total|intcomma }}</p>
       </div>

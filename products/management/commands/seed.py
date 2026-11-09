@@ -4,6 +4,9 @@ Destructive and idempotent: every run wipes the catalog and the demo
 accounts, then rebuilds the identical demo world. Run it whenever the
 database should return to a known state.
 
+Demo coupons: THOUGHTS10 (10% off the order), SERAPHINE50 (50% off
+Seraphine), SUMMER25 (expired), LEAKED20 (retired).
+
 Demo logins (documented in the README):
 
     admin / admin123        superuser
@@ -23,7 +26,7 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from accounts.models import Address
-from orders.models import Cart, Order, OrderItem
+from orders.models import Cart, Coupon, Order, OrderItem
 from products.models import Category, Product, Tag
 
 TAGS = [
@@ -514,6 +517,7 @@ class Command(BaseCommand):
         self._create_customer_cart()
         self._create_customer_addresses()
         self._create_orders()
+        self._create_coupons()
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -522,6 +526,7 @@ class Command(BaseCommand):
                 f"{Product.objects.count()} products, "
                 f"{get_user_model().objects.count()} users, "
                 f"{Order.objects.count()} orders, "
+                f"{Coupon.objects.count()} coupons, "
                 f"and a live cart for 'customer'."
             )
         )
@@ -529,6 +534,8 @@ class Command(BaseCommand):
     def _wipe(self):
         """Remove everything the seed owns; the rebuild starts from zero."""
         Order.objects.all().delete()
+        # Before products: a product coupon PROTECTs its product.
+        Coupon.objects.all().delete()
         Cart.objects.all().delete()
         Product.objects.all().delete()
         Tag.objects.all().delete()
@@ -669,6 +676,22 @@ class Command(BaseCommand):
                 ],
                 rng=rng,
             )
+
+    def _create_coupons(self):
+        """One coupon per rule, so every checkout path can be demonstrated:
+        order-wide, product-specific, expired, and retired. No seeded order
+        uses a coupon (plans/coupons.md, decision 9)."""
+        now = timezone.now()
+        Coupon.objects.create(code="THOUGHTS10", percent_off=10)
+        Coupon.objects.create(
+            code="SERAPHINE50",
+            percent_off=50,
+            product=Product.objects.get(slug="seraphine"),
+        )
+        Coupon.objects.create(
+            code="SUMMER25", percent_off=25, expires_at=now - timedelta(days=60)
+        )
+        Coupon.objects.create(code="LEAKED20", percent_off=20, is_active=False)
 
     def _build_order(self, *, user, created_at, status, lines, rng):
         """One order with denormalized addresses and purchase-time prices."""

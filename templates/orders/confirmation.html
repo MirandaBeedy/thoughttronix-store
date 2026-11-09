@@ -13,6 +13,11 @@
       <div class="card-body items-center">
         <p class="text-sm uppercase tracking-wide opacity-60">Order number</p>
         <p class="font-mono text-2xl font-bold text-primary">{{ order.number }}</p>
+        {% if order.has_discount %}
+          <div class="mt-2 w-full max-w-xs text-left">
+            {% include "orders/partials/_receipt_summary.html" %}
+          </div>
+        {% endif %}
         <p class="mt-2">
           {{ order.items.count }} item{{ order.items.count|pluralize }}
           · <span class="font-semibold">${{ order.total|intcomma }}</span>

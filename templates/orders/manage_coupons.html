@@ -1,0 +1,74 @@
+{% extends "backoffice/base.html" %}
+
+{% block title %}Coupons — Back office{% endblock %}
+
+{% block backoffice %}
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-4">
+    <h2 class="text-xl font-semibold">
+      {{ coupons|length }} coupon{{ coupons|length|pluralize }}
+    </h2>
+    <a href="{% url 'orders:manage_coupon_create' %}" class="btn btn-primary btn-sm">
+      + Add coupon
+    </a>
+  </div>
+
+  {% if coupons %}
+    <div class="overflow-x-auto rounded-box bg-base-100 shadow-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Discount</th>
+            <th>Applies to</th>
+            <th>Expires</th>
+            <th>Status</th>
+            <th class="text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for coupon in coupons %}
+            <tr>
+              <td>
+                <a href="{% url 'orders:manage_coupon_update' coupon.pk %}"
+                   class="link-hover font-mono font-semibold">{{ coupon.code }}</a>
+              </td>
+              <td>{{ coupon.percent_off }}% off</td>
+              <td>
+                {% if coupon.product %}{{ coupon.product.name }}{% else %}Whole order{% endif %}
+              </td>
+              <td>
+                {% if coupon.expires_at %}{{ coupon.expires_at|date:"M j, Y H:i" }} UTC{% else %}Never{% endif %}
+              </td>
+              <td>
+                {% if coupon.status == "Active" %}
+                  <span class="badge badge-success badge-outline">Active</span>
+                {% elif coupon.status == "Expired" %}
+                  <span class="badge badge-warning badge-outline">Expired</span>
+                {% else %}
+                  <span class="badge badge-ghost">Retired</span>
+                {% endif %}
+              </td>
+              <td class="text-right">
+                <a href="{% url 'orders:manage_coupon_update' coupon.pk %}"
+                   class="btn btn-ghost btn-xs">Edit</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-4 text-sm opacity-60">
+      To retire a coupon, edit it and switch off “Active”. Orders already
+      placed keep their discount either way.
+    </p>
+  {% else %}
+    <div class="py-16 text-center">
+      <p class="text-5xl">🎟️</p>
+      <p class="mt-4 text-xl font-semibold">No coupons yet</p>
+      <p class="mt-2 opacity-70">Every thought at full price. Bold strategy.</p>
+      <a href="{% url 'orders:manage_coupon_create' %}" class="btn btn-primary btn-sm mt-6">
+        Create the first coupon
+      </a>
+    </div>
+  {% endif %}
+{% endblock %}

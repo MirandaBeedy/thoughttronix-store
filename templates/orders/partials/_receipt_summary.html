@@ -1,0 +1,19 @@
+{# An order's coupon breakdown — subtotal and the coupon line — read from #}
+{# the order's snapshot fields, never from the live coupon. Renders #}
+{# nothing for an order without a discount. Needs: order. #}
+{% load humanize %}
+{% if order.has_discount %}
+  <dl class="w-full space-y-1 text-sm">
+    <div class="flex justify-between gap-4">
+      <dt>Subtotal</dt>
+      <dd class="whitespace-nowrap">${{ order.subtotal|intcomma }}</dd>
+    </div>
+    <div class="flex justify-between gap-4 text-success">
+      <dt>
+        Coupon {{ order.coupon_code }}
+        ({{ order.coupon_percent_off }}% off{% if order.coupon_product_name %} {{ order.coupon_product_name }}{% endif %})
+      </dt>
+      <dd class="whitespace-nowrap">−${{ order.discount_amount|intcomma }}</dd>
+    </div>
+  </dl>
+{% endif %}

@@ -4,25 +4,34 @@ The three HTMX interactions of the core live here: add-to-cart, quantity
 change, and line removal. Each renders a partial (never ``base.html``);
 the responses carry the navbar badge as an out-of-band swap via the
 ``oob_badge`` context flag. Checkout is conventional full-page work:
-validate the form, hand everything to ``place_order``. The one
-checkout-side HTMX interaction, ``AddressFieldsView``, refills an
-address section from a saved address.
+validate the form, hand everything to ``place_order``. Two checkout-side
+HTMX interactions: ``AddressFieldsView`` refills an address section
+from a saved address, and ``ApplyCouponView`` previews a coupon in the
+order summary.
 """
 
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.messages.views import SuccessMessageMixin
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.urls import reverse, reverse_lazy
 from django.views import View
-from django.views.generic import DetailView, FormView, ListView, TemplateView
+from django.views.generic import (
+    CreateView,
+    DetailView,
+    FormView,
+    ListView,
+    TemplateView,
+    UpdateView,
+)
 
 from accounts.mixins import StaffRequiredMixin
 from accounts.models import ADDRESS_KINDS, Address
 from products.models import Product
 
-from .forms import CheckoutForm, OrderStatusForm
-from .models import Cart, CartItem, Order
+from .forms import CheckoutForm, CouponForm, ManageCouponForm, OrderStatusForm
+from .models import Cart, CartItem, Coupon, CouponError, Order
 from .services import place_order
 
 
@@ -96,6 +105,10 @@ class CheckoutView(LoginRequiredMixin, FormView):
     since become unavailable) is sent back to the cart page to be fixed —
     ``place_order`` enforces the same rules transactionally as the
     backstop.
+
+    Two forms share the one POST: ``CheckoutForm`` (addresses, card) and
+    ``CouponForm`` (the coupon box). Both are validated every time, so all
+    errors show at once; the order is placed only when both are valid.
     """
 
     template_name = "orders/checkout.html"
@@ -129,16 +142,54 @@ class CheckoutView(LoginRequiredMixin, FormView):
                 initial.update(address.as_checkout_initial(kind))
         return initial
 
+    def get_coupon_form(self):
+        data = self.request.POST if self.request.method == "POST" else None
+        return CouponForm(data, cart=Cart.for_user(self.request.user))
+
+    def post(self, request, *args, **kwargs):
+        form = self.get_form()
+        coupon_form = self.get_coupon_form()
+        # A list, not ``and``: validate both so every error shows at once.
+        if all([form.is_valid(), coupon_form.is_valid()]):
+            return self.form_valid(form, coupon_form)
+        return self.form_invalid(form, coupon_form)
+
+    def form_invalid(self, form, coupon_form):
+        return self.render_to_response(
+            self.get_context_data(form=form, coupon_form=coupon_form)
+        )
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         user = self.request.user
-        context["cart"] = Cart.for_user(user)
+        cart = Cart.for_user(user)
+        coupon_form = kwargs.get("coupon_form")
+        if coupon_form is None:
+            coupon_form = self.get_coupon_form()
+        context["cart"] = cart
+        context["coupon_form"] = coupon_form
         context["saved_addresses"] = list(user.addresses.all())
+        context["summary"] = cart.checkout_summary(
+            coupon_form["coupon_code"].value() or ""
+        )
         return context
 
-    def form_valid(self, form):
+    def form_valid(self, form, coupon_form):
         cart = Cart.for_user(self.request.user)
-        order = place_order(cart, self.request.user, form.cleaned_data)
+        try:
+            order = place_order(
+                cart,
+                self.request.user,
+                form.cleaned_data,
+                coupon_code=coupon_form.cleaned_data["coupon_code"],
+            )
+        except CouponError as error:
+            # The backstop: the coupon changed between validation and now.
+            coupon_form.add_error("coupon_code", str(error))
+            return self.form_invalid(form, coupon_form)
+        except ValueError as error:
+            form.add_error(None, str(error))
+            return self.form_invalid(form, coupon_form)
         # After the order, deliberately outside its transaction: the order
         # matters more than the address book.
         for kind in ADDRESS_KINDS:
@@ -175,6 +226,25 @@ class AddressFieldsView(LoginRequiredMixin, View):
             request,
             "orders/partials/_address_fields.html",
             {"section": form.address_section(prefix)},
+        )
+
+
+class ApplyCouponView(LoginRequiredMixin, View):
+    """HTMX: preview a coupon — re-render the checkout order summary.
+
+    Stores nothing: the code rides along in the checkout form, and the
+    checkout POST validates it again. The response also swaps the
+    "Place order" button's total out-of-band.
+    """
+
+    def post(self, request):
+        summary = Cart.for_user(request.user).checkout_summary(
+            request.POST.get("coupon_code", "")
+        )
+        return render(
+            request,
+            "orders/partials/_order_summary.html",
+            {"summary": summary, "oob_total": True},
         )
 
 
@@ -263,3 +333,38 @@ class UpdateOrderStatusView(StaffRequiredMixin, View):
         else:
             messages.error(request, "That isn't a status an order can have.")
         return redirect("orders:manage_order_detail", pk=order.pk)
+
+
+# Staff-only coupon management: list, create, edit. Retiring is the
+# "Active" toggle on the edit form — there is deliberately no delete, so
+# an order's link to its coupon survives for reporting (the order's own
+# snapshot never depended on it).
+
+
+class ManageCouponListView(StaffRequiredMixin, ListView):
+    """Every coupon, alphabetical by code, with its Active/Expired/Retired status."""
+
+    template_name = "orders/manage_coupons.html"
+    context_object_name = "coupons"
+    extra_context = {"section": "coupons"}
+
+    def get_queryset(self):
+        return Coupon.objects.select_related("product")
+
+
+class ManageCouponCreateView(StaffRequiredMixin, SuccessMessageMixin, CreateView):
+    model = Coupon
+    form_class = ManageCouponForm
+    template_name = "orders/manage_coupon_form.html"
+    success_url = reverse_lazy("orders:manage_coupons")
+    success_message = "Coupon %(code)s created."
+    extra_context = {"section": "coupons"}
+
+
+class ManageCouponUpdateView(StaffRequiredMixin, SuccessMessageMixin, UpdateView):
+    model = Coupon
+    form_class = ManageCouponForm
+    template_name = "orders/manage_coupon_form.html"
+    success_url = reverse_lazy("orders:manage_coupons")
+    success_message = "Coupon %(code)s saved."
+    extra_context = {"section": "coupons"}

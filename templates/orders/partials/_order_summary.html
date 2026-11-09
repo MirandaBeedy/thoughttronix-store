@@ -1,0 +1,30 @@
+{# Checkout totals: subtotal, the coupon line or its error, total. #}
+{# Rendered by the checkout page and swapped in by ApplyCouponView; with #}
+{# oob_total it also refreshes the "Place order" button's amount. #}
+{% load humanize %}
+<div id="order-summary" class="space-y-2">
+  {% if summary.error %}
+    <p class="text-sm text-error" role="alert">{{ summary.error }}</p>
+  {% endif %}
+  <p class="flex justify-between text-sm">
+    <span>Subtotal</span>
+    <span>${{ summary.subtotal|intcomma }}</span>
+  </p>
+  {% if summary.coupon %}
+    <p class="flex justify-between gap-4 text-sm text-success">
+      <span>
+        Coupon {{ summary.coupon.code }}
+        ({{ summary.coupon.percent_off }}% off{% if summary.coupon.product %} {{ summary.coupon.product.name }}{% endif %})
+      </span>
+      <span class="whitespace-nowrap">−${{ summary.discount|intcomma }}</span>
+    </p>
+  {% endif %}
+  <div class="divider my-2"></div>
+  <p class="flex justify-between font-semibold">
+    <span>Total</span>
+    <span class="text-primary">${{ summary.total|intcomma }}</span>
+  </p>
+</div>
+{% if oob_total %}
+  <span id="place-order-total" hx-swap-oob="true">{{ summary.total|intcomma }}</span>
+{% endif %}

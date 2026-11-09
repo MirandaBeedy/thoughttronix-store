@@ -8,9 +8,14 @@ and no ``clean()`` — none of its current rules need imperative validation.
 """
 
 from django import forms
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
+from django.db.models import Q
 
-from .models import Order
+from products.forms import StyledModelForm
+from products.models import Product
+
+from .models import Coupon, CouponError, Order, normalize_code
 from .validators import validate_card_number, validate_expiry
 
 US_STATES = [
@@ -157,6 +162,89 @@ class CheckoutForm(forms.Form):
 
     def card_fields(self):
         return [self[name] for name in self.fields if name.startswith("card_")]
+
+
+class CouponForm(forms.Form):
+    """The checkout coupon box — deliberately apart from ``CheckoutForm``.
+
+    ``CheckoutForm`` stays the declarative-validation showcase (no
+    ``clean_*``, per the PRD). A coupon is only valid against the database
+    and this customer's cart, which no field validator can see, so it gets
+    its own small form that owns that check. Together the two keep the
+    PRD's promise: when both are valid, ``place_order`` succeeds.
+
+    The input joins ``#checkout-form`` by the HTML ``form`` attribute, so
+    it can sit in the order-summary sidebar and still be submitted with
+    "Place order".
+    """
+
+    coupon_code = forms.CharField(
+        label="Coupon code",
+        max_length=30,
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "form": "checkout-form",
+                "autocomplete": "off",
+                "class": "input join-item w-full",
+            }
+        ),
+    )
+
+    def __init__(self, *args, cart, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cart = cart
+
+    def clean_coupon_code(self):
+        """Normalize the code; reject one that can't apply to this cart."""
+        code = normalize_code(self.cleaned_data["coupon_code"])
+        if code:
+            try:
+                Coupon.objects.get_by_code(code).discount_for(self.cart)
+            except CouponError as error:
+                raise ValidationError(str(error)) from error
+        return code
+
+
+class ManageCouponForm(StyledModelForm):
+    """The back-office coupon form — create and edit; retiring is the toggle.
+
+    ``clean_code`` uppercases the code *before* the uniqueness check, so
+    "thoughts10" is caught as a duplicate of "THOUGHTS10" with a form
+    error rather than a database error. The product menu offers available
+    products (blank = the whole order), plus the coupon's current product
+    even if it has since become unavailable.
+    """
+
+    class Meta:
+        model = Coupon
+        fields = ["code", "percent_off", "product", "expires_at", "is_active"]
+        labels = {
+            "percent_off": "Percent off",
+            "expires_at": "Expires at (UTC)",
+            "is_active": "Active",
+        }
+        help_texts = {
+            "code": "Customers type this at checkout; case doesn't matter.",
+            "percent_off": "A whole number from 1 to 100.",
+        }
+        widgets = {
+            "expires_at": forms.DateTimeInput(
+                attrs={"type": "datetime-local"}, format="%Y-%m-%dT%H:%M"
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        products = Q(is_available=True)
+        if self.instance.product_id is not None:
+            products |= Q(pk=self.instance.product_id)
+        product_field = self.fields["product"]
+        product_field.queryset = Product.objects.filter(products)
+        product_field.empty_label = "Whole order"
+
+    def clean_code(self):
+        return normalize_code(self.cleaned_data["code"])
 
 
 class OrderStatusForm(forms.ModelForm):

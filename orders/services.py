@@ -6,12 +6,13 @@ validated checkout into an order, all-or-nothing. Callers never touch
 """
 
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any
 
 from django.contrib.auth.models import AbstractBaseUser
 from django.db import transaction
 
-from .models import Cart, Order, OrderItem
+from .models import Cart, Coupon, Order, OrderItem
 
 ADDRESS_FIELDS = [
     "email",
@@ -46,11 +47,19 @@ def place_order(
     only the last four digits are stored; the full number and CVV never
     touch the database.
 
+    ``coupon_code``, if given and not blank, is looked up (ignoring case)
+    and applied via ``Coupon.discount_for``. This is the backstop: the
+    checkout form validates the code too, but the coupon may have expired
+    or been retired since. The order snapshots the code, percentage and
+    targeted product name, so later edits to the coupon, or retiring or
+    deleting it, never change the order.
+
     All-or-nothing: runs in a transaction, so a failure partway through
     leaves no partial order and the cart intact.
 
     Raises ``ValueError`` if the cart is empty or holds a product that is
-    no longer available.
+    no longer available, and ``CouponError`` (a ``ValueError``) if the
+    coupon can't be applied.
     """
     lines = list(cart.lines())
     if not lines:
@@ -62,11 +71,27 @@ def place_order(
             "Remove them from the cart to check out."
         )
 
+    subtotal = cart.total()
+    coupon_fields: dict[str, Any] = {}
+    discount = Decimal("0.00")
+    if coupon_code and coupon_code.strip():
+        coupon = Coupon.objects.select_related("product").get_by_code(coupon_code)
+        discount = coupon.discount_for(cart)
+        coupon_fields = {
+            "coupon": coupon,
+            "coupon_code": coupon.code,
+            "coupon_percent_off": coupon.percent_off,
+            "coupon_product_name": coupon.product.name if coupon.product else "",
+        }
+
     card_digits = checkout_data["card_number"].replace(" ", "").replace("-", "")
     order = Order.objects.create(
         user=user,
-        total=cart.total(),
+        subtotal=subtotal,
+        discount_amount=discount,
+        total=subtotal - discount,
         card_last4=card_digits[-4:],
+        **coupon_fields,
         **{name: checkout_data[name] for name in ADDRESS_FIELDS},
     )
     for line in lines:

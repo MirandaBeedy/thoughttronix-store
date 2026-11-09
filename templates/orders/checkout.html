@@ -7,7 +7,7 @@
   <h1 class="text-3xl font-bold">Checkout</h1>
 
   <div class="mt-6 grid gap-8 lg:grid-cols-3">
-    <form method="post" action="{% url 'orders:checkout' %}" class="space-y-6 lg:col-span-2">
+    <form id="checkout-form" method="post" action="{% url 'orders:checkout' %}" class="space-y-6 lg:col-span-2">
       {% csrf_token %}
 
       {% for error in form.non_field_errors %}
@@ -58,7 +58,7 @@
       </section>
 
       <button type="submit" class="btn btn-primary w-full">
-        Place order — ${{ cart.total|intcomma }}
+        Place order — $<span id="place-order-total">{{ summary.total|intcomma }}</span>
       </button>
     </form>
 
@@ -75,10 +75,27 @@
             {% endfor %}
           </ul>
           <div class="divider my-2"></div>
-          <p class="flex justify-between font-semibold">
-            <span>Total</span>
-            <span class="text-primary">${{ cart.total|intcomma }}</span>
-          </p>
+          {# The input belongs to #checkout-form (its form attribute), so #}
+          {# "Place order" always sends it; "Apply" only previews. #}
+          <label class="label mb-1" for="{{ coupon_form.coupon_code.id_for_label }}">{{ coupon_form.coupon_code.label }}</label>
+          <div class="join w-full">
+            {{ coupon_form.coupon_code }}
+            <button type="button" class="btn join-item"
+                    hx-post="{% url 'orders:apply_coupon' %}"
+                    hx-include="#{{ coupon_form.coupon_code.id_for_label }}"
+                    hx-target="#order-summary"
+                    hx-swap="outerHTML">
+              Apply
+            </button>
+          </div>
+          {# The summary normally carries the coupon error; this covers the #}
+          {# backstop case where place_order rejected a code the summary accepted. #}
+          {% if not summary.error %}
+            {% for error in coupon_form.coupon_code.errors %}
+              <p class="text-sm text-error" role="alert">{{ error }}</p>
+            {% endfor %}
+          {% endif %}
+          {% include "orders/partials/_order_summary.html" %}
           <a href="{% url 'orders:cart' %}" class="link link-hover text-sm opacity-70">
             Edit cart
           </a>

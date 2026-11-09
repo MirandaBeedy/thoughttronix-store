@@ -1,7 +1,7 @@
 """place_order tests — coverage priority 3 in the PRD.
 
-Denormalization, cart emptying, atomicity, unavailable rejection, and
-the card_last4-only rule.
+Denormalization, cart emptying, atomicity, unavailable rejection, coupons,
+and the card_last4-only rule.
 """
 
 from decimal import Decimal
@@ -10,8 +10,8 @@ import pytest
 
 from products.models import Product
 
-from .models import CartItem, Order, OrderItem
-from .services import place_order
+from .models import CartItem, CouponError, Order, OrderItem
+from .services import ADDRESS_FIELDS, place_order
 from .test_checkout_form import VALID_DATA
 
 
@@ -124,7 +124,206 @@ def test_a_failure_midway_leaves_no_partial_order(
     assert CartItem.objects.count() == 2
 
 
-def test_the_coupon_seam_is_accepted_and_ignored(cart, cart_item, checkout_data):
-    order = place_order(cart, cart.user, checkout_data, coupon_code="THOUGHTS10")
+# --- Coupons (plans/coupons.md, Phase 2) --------------------------------------
+
+
+def test_without_a_coupon_the_order_is_full_price(cart, cart_item, checkout_data):
+    order = place_order(cart, cart.user, checkout_data)
+
+    assert order.subtotal == Decimal("699.98")
+    assert order.discount_amount == Decimal("0.00")
+    assert order.total == Decimal("699.98")
+    assert order.coupon is None
+    assert order.coupon_code == ""
+    assert order.coupon_percent_off is None
+    assert order.coupon_product_name == ""
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_a_blank_coupon_code_is_no_coupon(cart, cart_item, checkout_data, blank):
+    order = place_order(cart, cart.user, checkout_data, coupon_code=blank)
 
     assert order.total == Decimal("699.98")
+    assert order.coupon is None
+
+
+def test_order_wide_coupon_discounts_and_snapshots(
+    cart, cart_item, checkout_data, coupon
+):
+    order = place_order(cart, cart.user, checkout_data, coupon_code="THOUGHTS10")
+
+    assert order.subtotal == Decimal("699.98")
+    assert order.discount_amount == Decimal("70.00")
+    assert order.total == Decimal("629.98")
+    assert order.coupon == coupon
+    assert order.coupon_code == "THOUGHTS10"
+    assert order.coupon_percent_off == 10
+    assert order.coupon_product_name == ""
+
+
+def test_product_coupon_discounts_and_snapshots(
+    cart, cart_item, checkout_data, product_coupon, category
+):
+    sticker = Product.objects.create(
+        name="Thought Sticker",
+        slug="thought-sticker",
+        price=Decimal("19.99"),
+        category=category,
+    )
+    CartItem.objects.create(cart=cart, product=sticker)
+
+    order = place_order(cart, cart.user, checkout_data, coupon_code="SERAPHINE50")
+
+    # 2 × $349.99 + $19.99 = $719.97; half off the Seraphine line = $349.99
+    assert order.subtotal == Decimal("719.97")
+    assert order.discount_amount == Decimal("349.99")
+    assert order.total == Decimal("369.98")
+    assert order.coupon_code == "SERAPHINE50"
+    assert order.coupon_percent_off == 50
+    assert order.coupon_product_name == "Seraphine Home Hub"
+
+
+def test_line_prices_are_not_rewritten_by_a_coupon(
+    cart, cart_item, checkout_data, product_coupon
+):
+    order = place_order(cart, cart.user, checkout_data, coupon_code="SERAPHINE50")
+
+    assert order.items.get().unit_price == Decimal("349.99")
+
+
+def test_the_coupon_code_ignores_case(cart, cart_item, checkout_data, coupon):
+    order = place_order(cart, cart.user, checkout_data, coupon_code=" thoughts10 ")
+
+    assert order.coupon_code == "THOUGHTS10"
+    assert order.total == Decimal("629.98")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("NOPE", "We don't recognize"),
+        ("SUMMER25", "expired on Oct 31, 2025"),
+        ("LEAKED20", "no longer available"),
+        ("SERAPHINE50", "isn't in your cart"),
+    ],
+)
+def test_an_unusable_coupon_places_no_order_and_keeps_the_cart(
+    cart,
+    checkout_data,
+    expired_coupon,
+    retired_coupon,
+    product_coupon,
+    category,
+    code,
+    message,
+):
+    sticker = Product.objects.create(
+        name="Thought Sticker",
+        slug="thought-sticker",
+        price=Decimal("19.99"),
+        category=category,
+    )
+    CartItem.objects.create(cart=cart, product=sticker)
+
+    with pytest.raises(CouponError, match=message):
+        place_order(cart, cart.user, checkout_data, coupon_code=code)
+
+    assert not Order.objects.exists()
+    assert not OrderItem.objects.exists()
+    assert cart.items.count() == 1
+
+
+def test_coupon_error_is_a_value_error():
+    # Callers that already catch place_order's ValueError catch coupons too.
+    assert issubclass(CouponError, ValueError)
+
+
+# --- Requirement 3: a placed order is frozen --------------------------------
+
+
+def _place_with_coupon(cart, checkout_data):
+    order = place_order(cart, cart.user, checkout_data, coupon_code="SERAPHINE50")
+    return order.pk
+
+
+def _assert_frozen(pk):
+    order = Order.objects.get(pk=pk)
+    assert order.subtotal == Decimal("699.98")
+    assert order.discount_amount == Decimal("349.99")
+    assert order.total == Decimal("349.99")
+    assert order.coupon_code == "SERAPHINE50"
+    assert order.coupon_percent_off == 50
+    assert order.coupon_product_name == "Seraphine Home Hub"
+    return order
+
+
+def test_retiring_the_coupon_leaves_placed_orders_unchanged(
+    cart, cart_item, checkout_data, product_coupon
+):
+    pk = _place_with_coupon(cart, checkout_data)
+
+    product_coupon.is_active = False
+    product_coupon.save()
+
+    assert _assert_frozen(pk).coupon == product_coupon
+
+
+def test_editing_the_coupon_leaves_placed_orders_unchanged(
+    cart, cart_item, checkout_data, product_coupon, category
+):
+    pk = _place_with_coupon(cart, checkout_data)
+
+    product_coupon.code = "SERAPHINE75"
+    product_coupon.percent_off = 75
+    product_coupon.product = Product.objects.create(
+        name="Seraphine Mini",
+        slug="seraphine-mini",
+        price=Decimal("99.00"),
+        category=category,
+    )
+    product_coupon.save()
+
+    _assert_frozen(pk)
+
+
+def test_deleting_the_coupon_leaves_placed_orders_unchanged(
+    cart, cart_item, checkout_data, product_coupon
+):
+    pk = _place_with_coupon(cart, checkout_data)
+
+    product_coupon.delete()
+
+    assert _assert_frozen(pk).coupon is None
+
+
+def test_renaming_the_targeted_product_leaves_placed_orders_unchanged(
+    cart, cart_item, checkout_data, product_coupon, product
+):
+    pk = _place_with_coupon(cart, checkout_data)
+
+    product.name = "Seraphine Home Hub (2027 Edition)"
+    product.save()
+
+    _assert_frozen(pk)
+
+
+# --- The Order model's subtotal default -------------------------------------
+
+
+def test_an_order_without_a_subtotal_gets_one_from_the_invariant(
+    customer, checkout_data
+):
+    addresses = {name: checkout_data[name] for name in ADDRESS_FIELDS}
+    plain = Order.objects.create(
+        user=customer, total=Decimal("9.00"), card_last4="4242", **addresses
+    )
+    discounted = Order.objects.create(
+        user=customer,
+        total=Decimal("9.00"),
+        discount_amount=Decimal("1.00"),
+        card_last4="4242",
+        **addresses,
+    )
+
+    assert plain.subtotal == Decimal("9.00")
+    assert discounted.subtotal == Decimal("10.00")
